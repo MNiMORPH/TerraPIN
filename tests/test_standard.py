@@ -454,3 +454,51 @@ def test_abandoned_channel_survives_as_a_paleochannel_terrace():
              if t["kind"] == "channel" and np.isclose(t["z"], -8.0)]
     assert chans
     assert chans[0]["age"] == 20.0           # the avulsion, not the -15 incision
+
+
+# --- hillslope: slope retreat + talus (retreat) ---
+
+def _abandoned_left_wall():
+    st = fresh(0.0, 16.0)
+    st.set_channel_depth(4.0)
+    st.establish_channel(); st.incise(-12.0); st.migrate(45.0)   # leave the left wall
+    return st
+
+
+def test_retreat_sheds_talus_conserving_mass():
+    st = _abandoned_left_wall()
+    rock = lambda: unary_union([g for n, g in st.bodies.items()
+                                if "colluvium" not in n and not g.is_empty]).area
+    before = rock()
+    st.retreat("left", 3.0)
+    st.retreat("left", 3.0)
+    talus = st.bodies["colluvium_left"]
+    assert not talus.is_empty
+    assert st.provenance["colluvium_left"]["kind"] == "colluvium"
+    # rock lost == talus solid (the shed rock, fluffed back): mass conserved
+    assert np.isclose(before - rock(), talus.area * (1.0 - st.lambda_p), atol=1e-6)
+    # the apron rests ON the strath (its base sits at the channel-bed / strath level)
+    assert np.isclose(talus.bounds[1], st.z_ch, atol=1e-6)
+
+
+def test_retreat_buries_the_wall_base_and_decelerates():
+    st = _abandoned_left_wall()
+    st.retreat("left", 2.0)
+    shed1 = sum(st.eroded.values())
+    top1 = st.bodies["colluvium_left"].bounds[3]
+    st.retreat("left", 2.0)
+    shed2 = sum(st.eroded.values())
+    top2 = st.bodies["colluvium_left"].bounds[3]
+    assert top2 > top1                        # apron grows, burying more wall
+    assert shed2 < shed1                       # retreat decelerates (less face exposed)
+
+
+def test_retreat_left_and_right_are_mirror_images():
+    left = fresh(0.0, 16.0); left.set_channel_depth(4.0)
+    left.establish_channel(); left.incise(-12.0); left.migrate(45.0)
+    left.retreat("left", 4.0)
+    right = fresh(0.0, 16.0); right.set_channel_depth(4.0)
+    right.establish_channel(); right.incise(-12.0); right.migrate(-45.0)
+    right.retreat("right", 4.0)
+    assert np.isclose(left.bodies["colluvium_left"].area,
+                      right.bodies["colluvium_right"].area)
