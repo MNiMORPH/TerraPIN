@@ -502,3 +502,15 @@ def test_retreat_left_and_right_are_mirror_images():
     right.retreat("right", 4.0)
     assert np.isclose(left.bodies["colluvium_left"].area,
                       right.bodies["colluvium_right"].area)
+
+
+def test_retreat_strath_is_the_wall_foot_not_the_current_bed():
+    # If the channel incises AFTER abandoning a wall, that wall's talus must rest on
+    # the strath at its FOOT (the old level), not follow the deepened channel bed.
+    st = fresh(0.0, 16.0)
+    st.set_channel_depth(4.0)
+    st.establish_channel(); st.incise(-12.0); st.migrate(45.0)   # left-wall strath at -12
+    st.incise(-22.0)                                             # channel re-incises deeper
+    st.retreat("left", 3.0)
+    talus = st.bodies["colluvium_left"]
+    assert np.isclose(talus.bounds[1], -12.0, atol=0.3)         # foot strath, not -22
