@@ -244,6 +244,71 @@ class StandardTerrapin(object):
             self._sweep_erode(x1, z1, at_capacity=at_capacity, age=age)
         self._coalesce_bodies()
 
+    # ---------------------------- hillslope processes ------------------------
+
+    def retreat(self, side, dx):
+        """
+        Slope retreat on a valley wall ('left' or 'right') -- the model's hillslope
+        (river-absent) counterpart to the channel's fluvial work.
+
+        The EXPOSED face (above any talus already at its base) steps back parallel
+        by dx, and the shed rock piles as TALUS (colluvium) against the wall base,
+        its free surface at the colluvium angle of repose. The apron buries the
+        lower face, so repeated calls retreat only the still-exposed face and the
+        pile grows against the retreating wall (the retreat decelerates as more face
+        is shielded). Mass is conserved: the shed rock becomes the talus solid.
+
+        The talus is placed by geometry.colluvial_pile in the bounded wall-strath
+        corner; the cumulative shed volume is read back from the existing pile
+        (pile area * (1 - lambda_p)), so no extra state is tracked. The right wall
+        is handled in a frame reflected about the channel, like the fluvial walls.
+        """
+        strath_z = self.z_ch                        # planed floor beside the wall
+        minx, _, maxx, _ = unary_union(list(self.bodies.values())).bounds
+        top_z = self._surface_elevation(minx + 1.0 if side == "left" else maxx - 1.0)
+        tname = "colluvium_%s" % side
+        talus = self.bodies.get(tname)
+        has_talus = talus is not None and not talus.is_empty
+        h = talus.bounds[3] if has_talus else strath_z      # current burial top
+        rock = self._rock()
+        # retreat the EXPOSED rock face (above the talus) parallel by dx
+        openair = box(minx - 1.0, strath_z, maxx + 1.0, top_z + 5.0).difference(rock)
+        if side == "left":
+            band = box(minx - 1.0, h + 1.0e-9, self.x_ch, top_z + 5.0)
+            voidbox = box(minx - 1.0, strath_z, self.x_ch, top_z)
+            xoff = -dx
+        else:
+            band = box(self.x_ch, h + 1.0e-9, maxx + 1.0, top_z + 5.0)
+            voidbox = box(self.x_ch, strath_z, maxx + 1.0, top_z)
+            xoff = dx
+        slab = rock.intersection(translate(openair, xoff=xoff)).intersection(band)
+        self.eroded = {n: (g.intersection(slab).area if "colluvium" not in n else 0.0)
+                       for n, g in self.bodies.items()}
+        self.bodies = {n: (g.difference(slab) if "colluvium" not in n else g)
+                       for n, g in self.bodies.items()}
+        shed = sum(self.eroded.values())
+        # cumulative shed = existing pile (fluffed) + this event, re-placed as one apron
+        old_solid = talus.area * (1.0 - self.lambda_p) if has_talus else 0.0
+        void = voidbox.difference(self._rock())
+        if void.is_empty:
+            self.deposited = 0.0
+            self.sediment_out = shed
+            self._coalesce_bodies()
+            return
+        if void.geom_type != "Polygon":
+            void = max(void.geoms, key=lambda g: g.area)
+        if side == "right":                         # reflect so the apron leans right
+            void = _reflect(void, self.x_ch)
+        pile, overflow = geometry.colluvial_pile(
+            old_solid + shed, void, self.repose_angles["colluvium"], self.lambda_p)
+        if side == "right":
+            pile = _reflect(pile, self.x_ch)
+        self.bodies[tname] = pile
+        self._record_deposit(tname, kind="colluvium", age=None)
+        self.deposited = pile.area - (talus.area if has_talus else 0.0)
+        self.sediment_out = overflow * (1.0 - self.lambda_p)    # only the un-fittable part leaves
+        self._coalesce_bodies()
+
     # -------------------------------- outputs --------------------------------
 
     def terraces(self):
@@ -371,6 +436,12 @@ class StandardTerrapin(object):
         self.eroded = {n: g.intersection(wedge).area for n, g in self.bodies.items()}
         self.bodies = {n: g.difference(wedge) for n, g in self.bodies.items()}
         self.sediment_out = sum(self.eroded.values())
+
+    def _rock(self):
+        """The solid EXCLUDING talus: bedrock + alluvium, what the walls are made
+        of. Slope retreat sources from this and pours talus (colluvium) beside it."""
+        return unary_union([g for n, g in self.bodies.items()
+                            if "colluvium" not in n and not g.is_empty])
 
     def _wall_wedge(self, z_ch, floor_half_width, x_axis, side):
         """One wall's eroded wedge, with the channel axis at x_axis.
