@@ -263,7 +263,7 @@ class StandardTerrapin(object):
         (pile area * (1 - lambda_p)), so no extra state is tracked. The right wall
         is handled in a frame reflected about the channel, like the fluvial walls.
         """
-        strath_z = self.z_ch                        # planed floor beside the wall
+        strath_z = self._strath_z(side)             # flat ground at the wall foot
         minx, _, maxx, _ = unary_union(list(self.bodies.values())).bounds
         top_z = self._surface_elevation(minx + 1.0 if side == "left" else maxx - 1.0)
         tname = "colluvium_%s" % side
@@ -598,6 +598,53 @@ class StandardTerrapin(object):
         solid = unary_union([g for g in self.bodies.values() if not g.is_empty])
         hit = LineString([(x, -_reach), (x, _reach)]).intersection(solid)
         return None if hit.is_empty else hit.bounds[3]      # bounds[3] = maxy = top
+
+    def _rock_surface(self, x, _reach=1.0e6):
+        """Top of the ROCK column (bedrock + alluvium, no talus) at position x."""
+        rock = self._rock()
+        hit = LineString([(x, -_reach), (x, _reach)]).intersection(rock)
+        return None if hit.is_empty else hit.bounds[3]
+
+    def _strath_z(self, side, _step=0.25, _tol=0.05, _flat_run=2.0):
+        """Elevation of the (assumed-flat) strath at the FOOT of the retreating wall
+        on `side`. Scan the rock surface inward from the intact far edge: it descends
+        the wall face, then flattens onto the strath at the base -- return that level.
+        A flat only counts as the strath if it RUNS for _flat_run (so a short bench at
+        a material contact partway down the wall is skipped, not mistaken for it).
+        Reads the rock (talus excluded), so it holds once the base is buried, and it
+        is the LOCAL strath by the wall, not the current channel bed (which may have
+        since incised). Falls back to z_ch if no clear wall/strath is found."""
+        minx, _, maxx, _ = self._rock().bounds
+        x, xend = (minx + 1.0, self.x_ch) if side == "left" else (maxx - 1.0, self.x_ch)
+        step = _step if side == "left" else -_step
+        prev = self._rock_surface(x)
+        descending = False
+        while (step > 0 and x < xend) or (step < 0 and x > xend):
+            x += step
+            s = self._rock_surface(x)
+            if s is None:
+                prev = s
+                continue
+            if prev is not None and s < prev - _tol:
+                descending = True                       # on the wall face
+            elif descending and prev is not None and abs(s - prev) <= _tol:
+                if self._flat_runs(x, step, s, _flat_run, _step, _tol):
+                    return s                            # a real strath, not a bench
+            prev = s
+        return self.z_ch
+
+    def _flat_runs(self, x, step, level, run, _step, _tol):
+        """True if the rock surface stays ~level (no further descent) for `run`
+        beyond x -- distinguishing the strath from a short contact bench."""
+        xx = x
+        for _ in range(int(run / _step)):
+            xx += step
+            ss = self._rock_surface(xx)
+            if ss is None:
+                return True
+            if ss < level - _tol:                       # descends again -> a bench
+                return False
+        return True
 
     def _provenance_key(self, name):
         """The full attribute signature of a body: kind, lithology, and age.
