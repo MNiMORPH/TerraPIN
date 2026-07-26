@@ -50,6 +50,7 @@ class StandardTerrapin(object):
         self.repose_angles = None   # {lithology: angle of repose [degrees]}
         self.lambda_p = 0.35        # default porosity lambda_p (bulk -> solid via 1 - lambda_p)
         self.porosities = {"bedrock": 0.0}  # per-lithology lambda_p; bedrock 0, else self.lambda_p
+        self.valley_width = None    # emergent wall-to-wall floor width (compute_valley_width)
         self.eroded = None          # {name: area}: material removed by the last cut
         self.deposited = 0.         # material laid down by the last operation [bulk area]
         self.area_out = 0.          # net BULK area exported by the last operation
@@ -326,6 +327,33 @@ class StandardTerrapin(object):
         self._coalesce_bodies()
 
     # -------------------------------- outputs --------------------------------
+
+    def compute_valley_width(self, _eps=1.0e-6):
+        """The emergent valley-floor width at the channel bed z_ch -- the wall-to-wall
+        span, measured from the geometry (a required coupling output).
+
+        Unlike the symmetric model this makes NO symmetry assumption: it finds the
+        left and right walls independently, so an off-centre channel gives the true
+        total width. "Walls" are the CONFINING sides -- the pre-existing (kind
+        'initial') bedrock + alluvium -- not the valley-floor deposits (channel belt,
+        floodplain, talus), which lie between the walls and so do not narrow it.
+        Returns inf if a wall is missing within the domain. (Measured at z_ch; when
+        the valley has aggraded this is the width at the bed, a refinement for later.)
+        """
+        walls = unary_union([g for n, g in self.bodies.items()
+                             if self.provenance.get(n, {}).get("kind") == "initial"
+                             and not g.is_empty])
+        if walls.is_empty:
+            self.valley_width = float("inf")
+            return self.valley_width
+        minx, _, maxx, _ = walls.bounds
+        z = self.z_ch + _eps
+        left = LineString([(self.x_ch, z), (minx - 1.0, z)]).intersection(walls)
+        right = LineString([(self.x_ch, z), (maxx + 1.0, z)]).intersection(walls)
+        x_left = left.bounds[2] if not left.is_empty else float("-inf")   # right edge of left wall
+        x_right = right.bounds[0] if not right.is_empty else float("inf")  # left edge of right wall
+        self.valley_width = x_right - x_left
+        return self.valley_width
 
     def terraces(self):
         """

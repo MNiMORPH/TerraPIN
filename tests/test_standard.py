@@ -519,3 +519,26 @@ def test_retreat_strath_is_the_wall_foot_not_the_current_bed():
     st.retreat("left", 3.0)
     talus = st.bodies["colluvium_left"]
     assert np.isclose(talus.bounds[1], -12.0, atol=0.3)         # foot strath, not -22
+
+
+# --- emergent valley width ---
+
+def test_valley_width_is_wall_to_wall_ignoring_floor_deposits():
+    st = fresh(0.0, 16.0)
+    st.set_channel_depth(4.0)
+    st.incise(-15.0)
+    assert np.isclose(st.compute_valley_width(), 16.0)     # channel width right after incise
+    st.migrate(40.0)                                       # widen the strath
+    plain = st.compute_valley_width()
+    assert plain > 16.0                                    # wider now
+    # a channel belt left on the floor is fill, not a wall -> width unchanged
+    b = fresh(0.0, 16.0); b.set_channel_depth(4.0)
+    b.incise(-15.0); b.migrate(40.0, at_capacity=True)
+    assert np.isclose(b.compute_valley_width(), plain)
+
+
+def test_valley_width_off_centre_channel_is_symmetric():
+    # width is a property of the section, not the channel position within it
+    a = fresh(0.0, 16.0); a.incise(-15.0)
+    b = fresh(30.0, 16.0); b.incise(-15.0)
+    assert np.isclose(a.compute_valley_width(), b.compute_valley_width())
