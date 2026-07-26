@@ -60,6 +60,34 @@ for t in tp.terraces():
           "| deposit age =", t["deposit_age"])
 ```
 
+## The standard model
+
+The symmetric `Terrapin` above holds the channel at a fixed position. The
+**standard model** — `StandardTerrapin` — instead resolves the channel's
+**position on the valley floor**, so the valley evolves asymmetrically. Alongside
+`incise` and `aggrade` it adds:
+
+- **`migrate(x)`** — the channel planes laterally to a new position, undercutting
+  the wall it advances into and (at transport capacity) leaving a channel belt.
+- **`avulse(x)`** — a discontinuous hop that abandons the old channel in place,
+  preserving its belt to be buried by later aggradation.
+- **`retreat(side, dx)`** — a **hillslope** process: an abandoned wall retreats
+  parallel and sheds **talus** at its base. This is the river-*absent* counterpart
+  to the channel's work — the interplay a migrating channel unlocks.
+
+All the channel motions are special cases of one primitive, **`sweep(x1, z1)`**: a
+level move is `migrate`, a vertical move is `incise`/`aggrade`, and a *diagonal*
+move — lateral planation while incising — leaves a **sloped strath**, the classic
+strath-terrace-forming process.
+
+Every body carries a **porosity**, so `sediment_out` is a **solid** volume (the
+load a river actually carries; `area_out` is the bulk), and
+`compute_valley_width()` returns the emergent wall-to-wall width. Those two, plus a
+**BMI** wrapper (`terrapin.bmi.BmiStandardTerrapin`, `pip install
+terrapin-valley[bmi]`), make the standard model ready to couple one cross-section
+per node to a long-profile model such as
+[GRLP](https://github.com/awickert/GRLP).
+
 ## Install and dependencies
 
 TerraPIN is a small pure-Python package; install it from source (`pip install
@@ -80,8 +108,10 @@ conda run -n terrapin python -m pytest
   standard model, and terrace/provenance tracking.
 - **[`examples/`](examples)** — worked cross-sections, in
   [`symmetric/`](examples/symmetric) (e.g. `terrace_tracking.py` — terraces read
-  back and labelled by age) and [`standard/`](examples/standard) (e.g.
-  `standard_terraces.py` — migration, avulsion, channel belts, and terraces).
+  back and labelled by age) and [`standard/`](examples/standard):
+  `standard_terraces.py` (migration, avulsion, channel belts, terraces),
+  `talus_slope_retreat.py` (the hillslope talus mechanism), and `talus_valley.py`
+  (fluvial abandonment then hillslope retreat).
 - **[AlluvStrat](https://github.com/awickert/alluvstrat)** — ADW's earlier raster
   model of alluvial stratigraphy in strike-section.
 
