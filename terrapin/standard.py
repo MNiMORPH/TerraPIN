@@ -48,13 +48,15 @@ class StandardTerrapin(object):
         self.channel_width = 0.     # flat width the incising river carves [m]
         self.channel_depth = 0.     # channel depth an avulsion cuts on landing [m]
         self.repose_angles = None   # {lithology: angle of repose [degrees]}
-        self.lambda_p = 0.35        # sediment porosity (fluffs eroded rock into colluvium)
+        self.lambda_p = 0.35        # sediment porosity (bulk -> solid via 1 - lambda_p)
+        self.porosities = {"bedrock": 0.0}  # per-lithology porosity overrides; else lambda_p
         self.eroded = None          # {name: area}: material removed by the last cut
-        self.deposited = 0.         # material laid down by the last aggradation [area]
-        self.sediment_out = 0.      # material exported by the last operation [area]
+        self.deposited = 0.         # material laid down by the last operation [bulk area]
+        self.area_out = 0.          # net BULK area exported by the last operation
+        self.sediment_out = 0.      # net SOLID volume exported (bulk * (1 - porosity)) -- the river's load
         self._n_fill = 0            # counter so each aggradation gets its own body
         self._n_belt = 0            # counter so each channel-belt deposit gets its own body
-        self.provenance = {}        # {name: {kind, lithology, age}}: deposit + its formation age
+        self.provenance = {}        # {name: {kind, lithology, age, porosity}}
         self.surfaces = []          # [{kind, z, abandoned}]: surfaces + their abandonment age
 
     # ----------------------------- configuration -----------------------------
@@ -91,8 +93,16 @@ class StandardTerrapin(object):
         self.repose_angles = repose_angles
 
     def set_porosity(self, lambda_p):
-        """Set the sediment porosity used to fluff eroded rock into colluvium."""
+        """Set the sediment porosity lambda_p -- the default for every lithology
+        except any overridden in `porosities` (bedrock is 0). Bodies convert their
+        bulk area to solid sediment volume as area * (1 - porosity)."""
         self.lambda_p = lambda_p
+
+    def set_porosities(self, porosities):
+        """Override porosity per lithology, e.g. {'bedrock': 0.0, 'alluvium': 0.4}.
+        Lithologies not listed fall back to lambda_p; recorded on each body at
+        deposition, so later changes affect only bodies made afterwards."""
+        self.porosities = dict(porosities)
 
     # -------------------------- operations (told to it) ----------------------
 
@@ -157,6 +167,7 @@ class StandardTerrapin(object):
         if x_new == self.x_ch:
             self.eroded = {n: 0.0 for n in self.bodies}
             self.deposited = 0.0
+            self.area_out = 0.0
             self.sediment_out = 0.0
             return
         # migration is the horizontal (z unchanged) case of the sweep
@@ -286,13 +297,17 @@ class StandardTerrapin(object):
                        for n, g in self.bodies.items()}
         self.bodies = {n: (g.difference(slab) if "colluvium" not in n else g)
                        for n, g in self.bodies.items()}
-        shed = sum(self.eroded.values())
-        # cumulative shed = existing pile (fluffed) + this event, re-placed as one apron
+        shed = sum(self.eroded.values())            # bulk rock removed
+        shed_solid = self._eroded_solid()           # its solid (bedrock full, alluvium * (1-lambda))
+        # cumulative talus SOLID = existing pile + this event, re-placed as one apron.
+        # colluvial_pile fluffs SOLID into talus bulk, so pass solid (alluvium, already
+        # at porosity lambda, does not re-fluff; only the bedrock fraction expands).
         old_solid = talus.area * (1.0 - self.lambda_p) if has_talus else 0.0
         void = voidbox.difference(self._rock())
         if void.is_empty:
             self.deposited = 0.0
-            self.sediment_out = shed
+            self.area_out = shed
+            self.sediment_out = shed_solid          # nothing piled -> all exported
             self._coalesce_bodies()
             return
         if void.geom_type != "Polygon":
@@ -300,13 +315,14 @@ class StandardTerrapin(object):
         if side == "right":                         # reflect so the apron leans right
             void = _reflect(void, self.x_ch)
         pile, overflow = geometry.colluvial_pile(
-            old_solid + shed, void, self.repose_angles["colluvium"], self.lambda_p)
+            old_solid + shed_solid, void, self.repose_angles["colluvium"], self.lambda_p)
         if side == "right":
             pile = _reflect(pile, self.x_ch)
         self.bodies[tname] = pile
         self._record_deposit(tname, kind="colluvium", age=None)
         self.deposited = pile.area - (talus.area if has_talus else 0.0)
-        self.sediment_out = overflow * (1.0 - self.lambda_p)    # only the un-fittable part leaves
+        self.area_out = shed - self.deposited                    # net bulk export
+        self.sediment_out = shed_solid - self._solid(tname, self.deposited)   # net solid
         self._coalesce_bodies()
 
     # -------------------------------- outputs --------------------------------
@@ -396,12 +412,29 @@ class StandardTerrapin(object):
     _PROBE = 1e-4       # vertical nudge to sample the material just under a surface
 
     def _record_deposit(self, name, kind, age):
-        """Log a body's provenance: its origin and formation age."""
+        """Log a body's provenance: origin, formation age, and porosity (so its bulk
+        area can be converted to a solid sediment volume, area * (1 - porosity))."""
+        litho = geometry._lithology(name)
         self.provenance[name] = {
             "kind": kind,
-            "lithology": geometry._lithology(name),
+            "lithology": litho,
             "age": age,
+            "porosity": self.porosities.get(litho, self.lambda_p),
         }
+
+    def _body_porosity(self, name):
+        """The porosity stamped on a body (fallback: by lithology / lambda_p)."""
+        p = self.provenance.get(name, {})
+        return p.get("porosity",
+                     self.porosities.get(geometry._lithology(name), self.lambda_p))
+
+    def _solid(self, name, area):
+        """Solid sediment volume of `area` of body `name`: area * (1 - porosity)."""
+        return area * (1.0 - self._body_porosity(name))
+
+    def _eroded_solid(self):
+        """Solid sediment volume of the last cut, summed over the bodies it removed."""
+        return sum(self._solid(n, a) for n, a in self.eroded.items())
 
     def _record_surface(self, kind, z, abandoned=None):
         """Log a surface and the age at which it was abandoned (its terrace age)."""
@@ -432,10 +465,13 @@ class StandardTerrapin(object):
                 surf["abandoned"] = age
 
     def _remove(self, wedge):
-        """Difference an eroded wedge from the bodies, recording the mass balance."""
+        """Difference an eroded wedge from the bodies, recording the mass balance:
+        area_out is the bulk area removed, sediment_out the solid it yields a river."""
         self.eroded = {n: g.intersection(wedge).area for n, g in self.bodies.items()}
         self.bodies = {n: g.difference(wedge) for n, g in self.bodies.items()}
-        self.sediment_out = sum(self.eroded.values())
+        self.deposited = 0.0
+        self.area_out = sum(self.eroded.values())
+        self.sediment_out = self._eroded_solid()
 
     def _rock(self):
         """The solid EXCLUDING talus: bedrock + alluvium, what the walls are made
@@ -520,6 +556,7 @@ class StandardTerrapin(object):
         self.x_ch, self.z_ch = x1, z1
         half_width = self.channel_width / 2.
         self.deposited = fill.area
+        belt_solid = 0.0
         if self.channel_depth > 0 and half_width > 0:
             column = box(x1 - half_width, z_fill - 1.0e6, x1 + half_width, z_fill)
             channel = box(x1 - half_width, z1, x1 + half_width, z_fill)  # open channel
@@ -529,12 +566,15 @@ class StandardTerrapin(object):
                 belt_name = "channel_belt_%d" % self._n_belt
                 self.bodies[belt_name] = belt
                 self._record_deposit(belt_name, kind="channel", age=age)
+                belt_solid = self._solid(belt_name, belt.area)
                 self._n_belt += 1
             self.deposited = self.bodies[name].area + belt.area
         self._record_deposit(name, kind="floodplain", age=age)
         self._record_surface("floodplain", z_fill, abandoned=None)
         self._n_fill += 1
-        self.sediment_out = 0.
+        # deposition is a sink: the river loses this solid to the fill (net export < 0)
+        self.area_out = -self.deposited
+        self.sediment_out = -(self._solid(name, self.bodies[name].area) + belt_solid)
 
     def _deposit_channel_belt(self, x_new, age):
         """Lay a channel-belt of alluvium, one channel depth thick, bank to bank.
@@ -561,7 +601,8 @@ class StandardTerrapin(object):
         self._record_deposit(name, kind="channel", age=age)
         self._n_belt += 1
         self.deposited = belt.area
-        self.sediment_out -= belt.area          # net export = eroded - deposited
+        self.area_out -= belt.area              # net bulk export = eroded - deposited
+        self.sediment_out -= self._solid(name, belt.area)      # net solid export
 
     def _fill_banks(self, age=None):
         """Line the valley floor around the channel with a channel-depth alluvial
@@ -586,7 +627,8 @@ class StandardTerrapin(object):
         self._record_deposit(name, kind="channel", age=age)
         self._n_belt += 1
         self.deposited = banks.area
-        self.sediment_out -= banks.area
+        self.area_out -= banks.area
+        self.sediment_out -= self._solid(name, banks.area)
 
     def _domain(self, z_top):
         """A bounding box that spans the bodies and reaches above z_top."""
