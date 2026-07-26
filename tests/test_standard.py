@@ -128,9 +128,13 @@ def test_incision_exports_sediment_and_conserves_mass():
     before = sum(g.area for g in st.bodies.values())
     st.incise(-20.0)
     after = sum(g.area for g in st.bodies.values())
-    assert st.sediment_out > 0.0
-    assert np.isclose(st.sediment_out, sum(st.eroded.values()))
-    assert np.isclose(before - after, st.sediment_out)
+    # area_out is the bulk removed; sediment_out is the solid it yields (< bulk,
+    # since porous alluvium is part of it), both > 0
+    assert st.area_out > 0.0
+    assert np.isclose(st.area_out, sum(st.eroded.values()))
+    assert np.isclose(before - after, st.area_out)            # bulk conserved
+    assert 0.0 < st.sediment_out < st.area_out
+    assert np.isclose(st.sediment_out, st._eroded_solid())
 
 
 # --- migrate ---
@@ -146,8 +150,8 @@ def test_migrate_leaves_the_retreating_wall_and_conserves_mass():
     left_after = unary_union(list(st.bodies.values())).intersection(retreating).area
     assert st.x_ch == 25.0
     assert np.isclose(left_before, left_after)            # retreating wall untouched
-    assert st.sediment_out > 0.0
-    assert np.isclose(before - after, st.sediment_out)    # mass conserved
+    assert st.area_out > 0.0
+    assert np.isclose(before - after, st.area_out)        # bulk conserved
 
 
 def test_migrate_to_same_position_is_a_noop():
@@ -156,6 +160,7 @@ def test_migrate_to_same_position_is_a_noop():
     before = {n: g.area for n, g in st.bodies.items()}
     st.migrate(0.0)
     assert st.sediment_out == 0.0
+    assert st.area_out == 0.0
     for name, area in before.items():
         assert np.isclose(st.bodies[name].area, area)
 
@@ -241,8 +246,10 @@ def test_avulse_erodes_one_channel_depth_and_width():
     st.avulse(50.0)                        # land on flat floodplain (surface z = 0)
     assert st.x_ch == 50.0
     assert np.isclose(st.z_ch, -4.0)       # one channel depth below the surface
-    assert np.isclose(st.sediment_out, 22.0 * 4.0)      # width x depth
-    assert np.isclose(st.sediment_out, sum(st.eroded.values()))
+    assert np.isclose(st.area_out, 22.0 * 4.0)          # width x depth (bulk)
+    assert np.isclose(st.area_out, sum(st.eroded.values()))
+    # it cut porous alluvium, so the solid the river carries is bulk * (1 - lambda)
+    assert np.isclose(st.sediment_out, 22.0 * 4.0 * (1.0 - st.lambda_p))
 
 
 def test_avulse_grades_the_cut_valley_wall_to_repose():
@@ -294,16 +301,17 @@ def test_avulse_conserves_mass():
     before = sum(g.area for g in st.bodies.values())
     st.avulse(50.0)
     after = sum(g.area for g in st.bodies.values())
-    assert np.isclose(before - after, st.sediment_out)
+    assert np.isclose(before - after, st.area_out)        # bulk conserved
 
 
 # --- provenance and terraces (incise / aggrade) ---
 
 def test_initial_bodies_have_unknown_formation_age():
     st = fresh(0.0, 22.0)
-    assert st.provenance["bedrock"] == {"kind": "initial",
-                                        "lithology": "bedrock", "age": None}
+    assert st.provenance["bedrock"] == {"kind": "initial", "lithology": "bedrock",
+                                        "age": None, "porosity": 0.0}
     assert st.provenance["alluvium"]["kind"] == "initial"
+    assert st.provenance["alluvium"]["porosity"] == st.lambda_p   # porous alluvium
 
 
 def test_aggrade_records_a_floodplain_deposit():
@@ -393,8 +401,8 @@ def test_at_capacity_exports_less_than_erosional():
     b = fresh(0.0, 16.0); b.set_channel_depth(4.0); b.incise(-15.0)
     b.migrate(30.0, at_capacity=True, age=5.0)
     assert b.deposited > 0.0
-    assert b.sediment_out < a.sediment_out                # belt retained, less exported
-    assert np.isclose(a.sediment_out - b.deposited, b.sediment_out)   # net export
+    assert b.sediment_out < a.sediment_out                # belt retained, less solid exported
+    assert np.isclose(a.area_out - b.deposited, b.area_out)           # net bulk export
 
 
 # --- coalescing bodies that share all attributes ---
@@ -408,8 +416,8 @@ def test_contiguous_same_attribute_belts_merge_into_one_body():
     st.migrate(20.0, at_capacity=True, age=7.0)
     st.migrate(40.0, at_capacity=True, age=7.0)      # second belt, same age, contiguous
     same_age = [n for n in st.bodies
-                if st.provenance.get(n, {}) == {"kind": "channel",
-                                                "lithology": "alluvium", "age": 7.0}
+                if st.provenance.get(n, {}).get("kind") == "channel"
+                and st.provenance.get(n, {}).get("age") == 7.0
                 and not st.bodies[n].is_empty]
     assert len(same_age) == 1                         # merged, not two congruent pieces
 
@@ -467,17 +475,14 @@ def _abandoned_left_wall():
 
 def test_retreat_sheds_talus_conserving_mass():
     st = _abandoned_left_wall()
-    rock = lambda: unary_union([g for n, g in st.bodies.items()
-                                if "colluvium" not in n and not g.is_empty]).area
-    before = rock()
     st.retreat("left", 3.0)
     st.retreat("left", 3.0)
     talus = st.bodies["colluvium_left"]
     assert not talus.is_empty
     assert st.provenance["colluvium_left"]["kind"] == "colluvium"
-    # rock lost == talus solid (the shed rock, fluffed back): mass conserved
-    assert np.isclose(before - rock(), talus.area * (1.0 - st.lambda_p), atol=1e-6)
-    # the apron rests ON the strath (its base sits at the channel-bed / strath level)
+    # the shed rock all becomes talus (SOLID conserved) -> nothing net exported
+    assert np.isclose(st.sediment_out, 0.0, atol=1e-6)
+    # the apron rests ON the strath (its base sits at the wall-foot strath level)
     assert np.isclose(talus.bounds[1], st.z_ch, atol=1e-6)
 
 
