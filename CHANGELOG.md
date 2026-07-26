@@ -6,6 +6,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Standard model (`StandardTerrapin`)** — the mobile-channel model: two one-wall
+  units sharing a channel that moves across the valley floor, producing asymmetric
+  valleys, channel belts, buried paleochannels, and dated terraces. Operations:
+  `incise`, `aggrade`, `migrate` (lateral planation, with an optional at-capacity
+  channel belt), and `avulse` (a discontinuous hop that preserves the vacated belt).
+- **Unified `sweep(x1, z1)`** — the one channel-motion primitive of which `incise`,
+  `migrate`, and `aggrade` are special cases; it reads erode-vs-deposit from the
+  geometry. A diagonal sweep (lateral planation *while* incising) leaves a **sloped
+  strath** — the strath-terrace-forming process the discrete ops could only step.
+- **`retreat(side, dx)`** — the first **hillslope** process: a valley wall retreats
+  parallel and sheds **talus** (colluvium) at its base, burying it as the apron
+  grows. The river-absent counterpart to the channel's fluvial work.
+- **Per-body porosity (`lambda_p`)** — each body converts bulk area to a **solid**
+  sediment volume, `area * (1 - lambda_p)` (bedrock 0; alluvium/colluvium 0.35;
+  overridable via `set_porosities`). `sediment_out` is now the net **solid**
+  exported (a river's load); `area_out` is the net bulk area.
+- **`StandardTerrapin.compute_valley_width()`** — emergent, asymmetric, wall-to-wall
+  (floor deposits do not narrow it).
+- **BMI wrapper** — `terrapin.bmi.BmiStandardTerrapin` drives one cross-section
+  through the CSDMS Basic Model Interface; a `[bmi]` optional extra pulls `bmipy`.
+- **Body coalescing** — contiguous bodies that share all attributes (kind,
+  lithology, age, porosity) merge into one polygon; with ages tracked this gives a
+  litho+chronostratigraphy, without them a lithostratigraphy.
+- **Shared plotting module** (`terrapin.plotting`), used by both models and the
+  examples.
+- Examples reorganized into `examples/symmetric/` and `examples/standard/`, with
+  talus demos (`talus_slope_retreat.py`, `talus_valley.py`).
+
 ## [0.1.0] - 2026-07-23
 
 First release of the rewritten library. The geometry core is now polygon algebra
