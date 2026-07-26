@@ -309,9 +309,9 @@ def test_avulse_conserves_mass():
 def test_initial_bodies_have_unknown_formation_age():
     st = fresh(0.0, 22.0)
     assert st.provenance["bedrock"] == {"kind": "initial", "lithology": "bedrock",
-                                        "age": None, "porosity": 0.0}
+                                        "age": None, "lambda_p": 0.0}
     assert st.provenance["alluvium"]["kind"] == "initial"
-    assert st.provenance["alluvium"]["porosity"] == st.lambda_p   # porous alluvium
+    assert st.provenance["alluvium"]["lambda_p"] == st.lambda_p   # porous alluvium
 
 
 def test_aggrade_records_a_floodplain_deposit():

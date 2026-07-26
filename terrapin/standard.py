@@ -48,15 +48,15 @@ class StandardTerrapin(object):
         self.channel_width = 0.     # flat width the incising river carves [m]
         self.channel_depth = 0.     # channel depth an avulsion cuts on landing [m]
         self.repose_angles = None   # {lithology: angle of repose [degrees]}
-        self.lambda_p = 0.35        # sediment porosity (bulk -> solid via 1 - lambda_p)
-        self.porosities = {"bedrock": 0.0}  # per-lithology porosity overrides; else lambda_p
+        self.lambda_p = 0.35        # default porosity lambda_p (bulk -> solid via 1 - lambda_p)
+        self.porosities = {"bedrock": 0.0}  # per-lithology lambda_p; bedrock 0, else self.lambda_p
         self.eroded = None          # {name: area}: material removed by the last cut
         self.deposited = 0.         # material laid down by the last operation [bulk area]
         self.area_out = 0.          # net BULK area exported by the last operation
         self.sediment_out = 0.      # net SOLID volume exported (bulk * (1 - porosity)) -- the river's load
         self._n_fill = 0            # counter so each aggradation gets its own body
         self._n_belt = 0            # counter so each channel-belt deposit gets its own body
-        self.provenance = {}        # {name: {kind, lithology, age, porosity}}
+        self.provenance = {}        # {name: {kind, lithology, age, lambda_p}}
         self.surfaces = []          # [{kind, z, abandoned}]: surfaces + their abandonment age
 
     # ----------------------------- configuration -----------------------------
@@ -412,25 +412,25 @@ class StandardTerrapin(object):
     _PROBE = 1e-4       # vertical nudge to sample the material just under a surface
 
     def _record_deposit(self, name, kind, age):
-        """Log a body's provenance: origin, formation age, and porosity (so its bulk
-        area can be converted to a solid sediment volume, area * (1 - porosity))."""
+        """Log a body's provenance: origin, formation age, and porosity lambda_p (so
+        its bulk area converts to a solid sediment volume, area * (1 - lambda_p))."""
         litho = geometry._lithology(name)
         self.provenance[name] = {
             "kind": kind,
             "lithology": litho,
             "age": age,
-            "porosity": self.porosities.get(litho, self.lambda_p),
+            "lambda_p": self.porosities.get(litho, self.lambda_p),
         }
 
-    def _body_porosity(self, name):
-        """The porosity stamped on a body (fallback: by lithology / lambda_p)."""
+    def _lambda_p(self, name):
+        """The porosity lambda_p stamped on a body (fallback: by lithology)."""
         p = self.provenance.get(name, {})
-        return p.get("porosity",
+        return p.get("lambda_p",
                      self.porosities.get(geometry._lithology(name), self.lambda_p))
 
     def _solid(self, name, area):
-        """Solid sediment volume of `area` of body `name`: area * (1 - porosity)."""
-        return area * (1.0 - self._body_porosity(name))
+        """Solid sediment volume of `area` of body `name`: area * (1 - lambda_p)."""
+        return area * (1.0 - self._lambda_p(name))
 
     def _eroded_solid(self):
         """Solid sediment volume of the last cut, summed over the bodies it removed."""
